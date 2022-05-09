@@ -24,6 +24,7 @@
 #' @param cons.opt logical. Should a constrained optimization procedure for \eqn{\lambda} be used? \code{FALSE} as default.  
 #' @param approximation logical. If \code{TRUE} then \eqn{(I - \lambda W)^{-1}} is approximated as \eqn{I + \lambda W + \lambda^2 W^2 + \lambda^3 W^3 + ... +\lambda^q W^q}. The default is \code{FALSE}.
 #' @param pw numeric. The power used for the approximation \eqn{I + \lambda W + \lambda^2 W^2 + \lambda^3 W^3 + ... +\lambda^q W^q}. The default is 5.
+#' @param tol.solve Tolerance for \code{solve()}.
 #' @param verbose logical. If \code{TRUE}, the code reports messages and some values during optimization. 
 #' @param print.init logical. If \code{TRUE} the initial parameters used in the optimization of the first step are printed. 
 #' @param ... additional arguments passed to \code{maxLik}.
@@ -144,7 +145,7 @@
 #' LeSage, J. P., Kelley Pace, R., Lam, N., Campanella, R., & Liu, X. (2011). New Orleans business recovery in the aftermath of Hurricane Katrina. Journal of the Royal Statistical Society: Series A (Statistics in Society), 174(4), 1007-1027.
 #' 
 #' Piras, G., & Sarrias, M. (2022). One or Two-Step? Evaluating GMM Efficiency for Spatial Binary Probit Models. Manuscript submitted for publication. 
-#' @seealso \code{\link[spldv]{sbinaryLGMM}}, \code{\link[spldv]{effect.bingmm}}.
+#' @seealso \code{\link[spldv]{sbinaryLGMM}}, \code{\link[spldv]{impacts.bingmm}}.
 #' @keywords models
 #' @rawNamespace import(Matrix,  except = c(cov2cor, toeplitz, update)) 
 #' @import stats methods Formula maxLik
@@ -165,6 +166,7 @@ sbinaryGMM <- function(formula,
                        verbose = TRUE,                                  # print messages?
                        print.init = FALSE,                              # print initial values?
                        pw = 5,                                          # default powers for the approximation 
+                       tol.solve = .Machine$double.eps,                 # tolarance for solve
                        ...){
   # winitial: Weight matrix of moment for first step. 
   #      1. If optimal, then  Psi=((1/n)Z'Z)^{-1} Eq(13)
@@ -201,7 +203,7 @@ sbinaryGMM <- function(formula,
   
   # Optimization default controls if not added
   if (is.null(callT$method)) callT$method  <- 'bfgs'
-  if (is.null(callT$iterlm)) callT$iterlim <- 10000
+  if (is.null(callT$iterlim)) callT$iterlim <- 10000
   # if (is.null(callT$reltol)) callT$reltol  <- 1e-7
   if (is.null(callT$reltol)) callT$reltol  <- 1e-6
   callT$finalHessian <- FALSE # We do not require the Hessian. This speeds the optimization procedure. 
@@ -243,7 +245,8 @@ sbinaryGMM <- function(formula,
   ## Starting values for optimization of GMM
   if (is.null(start)){
     # Initial values from probit model for beta
-    sbinary      <- glm(y ~ as.matrix(X) - 1, family = binomial(link = link), data = mf)
+    #sbinary      <- glm(y ~ as.matrix(X) - 1, family = binomial(link = link), data = mf)
+    sbinary      <- glm.fit(as.matrix(X), y, family = binomial(link = link))
     b_init       <- sbinary$coef
     Wy           <- as.numeric(crossprod(t(W), y))
     lambda.init  <- cor(y, Wy)
@@ -264,15 +267,16 @@ sbinaryGMM <- function(formula,
     sym          <- all(W == t(W))
     omega        <- eigen(W, only.values = TRUE, symmetric = sym)
     lambda_space <- if (is.complex(omega$values)) 1 / range(Re(omega$values)) else 1 / range(omega$values)
+    # A %*% theta + B >= 0 
     A <- rbind(c(rep(0, K), 1), 
                c(rep(0, K), -1))  # Matrix of restrictions. See help(maxLik)
-    B <- cbind(c(abs(lambda_space[1] + .Machine$double.eps), abs(lambda_space[2] + .Machine$double.eps)))
+    B <- cbind(c(-1* (lambda_space[1] + .Machine$double.eps), lambda_space[2] - .Machine$double.eps))
     callT$constraints <- list(ineqA = A, ineqB = B)
   }
   
   ## Initial moment-weighing Psi matrix: it can be (N^{-1}H'H)^{-1} or identity matrix I_P
-  Psi <- if (winitial == "optimal") solve(crossprod(H) / N) else Diagonal(ncol(H))
-  
+  #Psi <- if (winitial == "optimal") solve(crossprod(H) / N) else Diagonal(ncol(H))
+  Psi <- if (winitial == "optimal") chol2inv(chol(crossprod(H) / N)) else Diagonal(ncol(H))
   # Optimization for nonlinear one-step GMM estimator 
   if (verbose) cat("\nFirst-step GMM optimization based on", winitial, "initial weight matrix \n")
   opt <- callT
@@ -282,11 +286,12 @@ sbinaryGMM <- function(formula,
                'control', 'finalHessian', 'reltol'),
              names(opt), 0L)
   opt <- opt[c(1L, m)]
-  opt[[1]]     <- as.name('maxLik')
-  opt$logLik   <- as.name('J_minML')
-  opt$gradient <- as.name('gradient')
-  opt$link     <- as.name('link')
-  opt$listw    <- as.name('W')
+  opt[[1]]      <- as.name('maxLik')
+  opt$logLik    <- as.name('J_minML')
+  opt$gradient  <- as.name('gradient')
+  opt$link      <- as.name('link')
+  opt$tol.solve <- as.name('tol.solve')
+  opt$listw     <- as.name('W')
   opt$approximation    <- as.name('approximation')
   opt$pw <- as.name('pw')
   opt[c('y', 'X', 'H', 'Psi')] <- list(as.name('y'), 
@@ -300,7 +305,7 @@ sbinaryGMM <- function(formula,
   if (type == "twostep") {
     # Make S matrix
     S   <- makeS(b_hat, y, X, H, W, link, wmatrix = s.matrix, approximation, pw)
-    Psi <- solve(S) 
+    Psi <- solve(S, tol = tol.solve) 
     
     if (verbose) cat("\nSecond-step GMM optimization using S moment-weighing matrix\n")
     opt$start     <- b_hat
@@ -327,7 +332,8 @@ sbinaryGMM <- function(formula,
       opt           = x, 
       approximation = approximation,
       pw            = pw, 
-      formula       = f1
+      formula       = f1, 
+      tol.solve     = tol.solve
     ), 
     class = "bingmm"
   )
@@ -353,7 +359,7 @@ app_W <- function(listw, lambda, pw){
 }
 
 # Moment function
-momB_slm <- function(start, y, X, H, listw, link, approximation, pw){
+momB_slm <- function(start, y, X, H, listw, link, approximation, pw, tol.solve){
   # This function generates: 
   #  (1) generalized residuals
   #  (2) the moment conditions 
@@ -366,7 +372,7 @@ momB_slm <- function(start, y, X, H, listw, link, approximation, pw){
   W       <- listw
   A       <- I - lambda * W
   ##FIXME: approximation can be computed in a better way?   
-  B       <- if (approximation) app_W(W, lambda, pw)  else solve(A)
+  B       <- if (approximation) app_W(W, lambda, pw)  else solve(A, tol = tol.solve)
   #B      <- qr.solve(A)   
   
   Sigma_u <- tcrossprod(B) #Equation (3)
@@ -406,8 +412,8 @@ momB_slm <- function(start, y, X, H, listw, link, approximation, pw){
 }
 
 # Objective function to be minimized
-J_minML <- function(start, y, X, H, listw, link, Psi, gradient, approximation, pw){
-  getR <- momB_slm(start, y, X, H, listw, link, approximation, pw)
+J_minML <- function(start, y, X, H, listw, link, Psi, gradient, approximation, pw, tol.solve){
+  getR <- momB_slm(start, y, X, H, listw, link, approximation, pw, tol.solve)
   g <-  getR$g
   J <-  -1 * crossprod(g, crossprod(t(Psi), g)) # g'Psi g 
   
@@ -488,7 +494,7 @@ coef.bingmm <- function(object, ...){
 #' @rdname sbinaryGMM
 #' @method vcov bingmm
 #' @export 
-vcov.bingmm <- function(object, vce = c("robust", "efficient", "ml"), method = "bhhh", R = 1000, ...){
+vcov.bingmm <- function(object, vce = c("robust", "efficient", "ml"), method = "bhhh", R = 1000, tol.solve = .Machine$double.eps, ...){
   # vce: indicates the estimator for the variance-covariance matrix when using two-step estimator
   #       1- if efficient, then the lowest bound of the vc is used. 
   vce           <- match.arg(vce)
@@ -514,13 +520,13 @@ vcov.bingmm <- function(object, vce = c("robust", "efficient", "ml"), method = "
   if (vce == "efficient"){
     G_bar  <- crossprod(H, G)
     # Similar to Stata, we use the the Psi that was used to compute the final-round estimate 
-    V      <- N * solve(crossprod(G_bar, crossprod(t(Psi), G_bar)))
+    V      <- N * solve(crossprod(G_bar, crossprod(t(Psi), G_bar)), tol = tol.solve)
   }
   if (vce == "robust"){
     # Based on Stata: Psi is the weight matrix requested with wmatrix() and it is calculated based on the residuals obtained after the first estimation step. 
     S     <- makeS(theta, y, X, H, listw, link, s.matrix, approximation, pw)
     G_bar <- crossprod(H, G)
-    pan   <- solve(crossprod(G_bar, crossprod(t(Psi), G_bar)))
+    pan   <- solve(crossprod(G_bar, crossprod(t(Psi), G_bar)), tol = tol.solve)
     queso <- crossprod(t(crossprod(G_bar, Psi)), crossprod(t(crossprod(t(S), Psi)), G_bar))
     V     <- N * pan %*% queso %*% pan
   }
@@ -566,10 +572,10 @@ print.bingmm <- function(x,
 #' @rdname sbinaryGMM
 #' @method summary bingmm
 #' @export
-summary.bingmm <- function(object, vce = c("robust", "efficient", "ml"), method = "bhhh", R = 1000, ...){
+summary.bingmm <- function(object, vce = c("robust", "efficient", "ml"), method = "bhhh", R = 1000, tol.solve = .Machine$double.eps, ...){
   vce                 <- match.arg(vce)
   b                   <- object$coefficients
-  std.err             <- sqrt(diag(vcov(object, vce = vce, method = method, R = R)))
+  std.err             <- sqrt(diag(vcov(object, vce = vce, method = method, R = R, tol.solve = tol.solve)))
   z                   <- b / std.err
   p                   <- 2 * (1 - pnorm(abs(z)))
   CoefTable           <- cbind(b, std.err, z, p)
@@ -610,26 +616,29 @@ print.summary.bingmm <- function(x,
 #' 
 #' @param obj a \code{bingmm} object,
 #' @param alpha level of the confidence intervals,
-#' @param vce string indicating what kind of standard errors should be computed when using \code{summary}. For the one-step GMM estimator, the options are \code{"robust"} and \code{"ml"}. For the two-step GMM estimator, the options are \code{"robust"}, \code{"efficient"} and \code{"ml"}. The option \code{"vce = ml"} is an exploratory method that evaluates the VC of the RIS estimator using the GMM estimates.
-#' @param R only valid if \code{vce = "ml"}. It indicates the number of draws used to compute the simulated probability in the RIS estimator.  
-#' @param method only valid if \code{vce = "ml"}. It indicates the algorithm used to compute the Hessian matrix of the RIS estimator. The defult is \code{"bhhh"}.  
 #' @param ... further arguments,
 #' 
 #' @details For more details see package \pkg{memisc}.
 #' @return A list with an array with coefficient estimates and a vector containing the model summary statistics. 
 #' @importFrom memisc getSummary
+#' @method getSummary bingmm
 #' @export 
-getSummary.bingmm <- function(obj, alpha = 0.05, vce = c("robust", "efficient", "ml"), method = "bhhh", R = 1000, ...){
-  smry <- summary(obj, vce, method, R)
-  coef <- smry$Coef
+getSummary.bingmm <- function(obj, alpha = 0.05, ...){
+  if (inherits(obj, c("summary.bingmm"))){
+    coef <- obj$CoefTable
+  } else {
+    smry <- summary(obj)
+    coef <- smry$Coef
+  }
   lower <- coef[, 1] - coef[, 2] * qnorm(alpha/2)
   upper <- coef[, 1] + coef[, 2] * qnorm(alpha/2)
   coef <- cbind(coef, lower, upper)
   colnames(coef) <- c("est", "se", "stat", "p", "lwr", "upr")
   N <-  nrow(obj$X)
-  sumstat <- c(logLik = NA, deviance = NA, AIC = NA, BIC = NA, N = N, 
-               LR = NA, df = NA, p = NA, Aldrich.Nelson = NA, McFadden = NA, Cox.Snell = NA,
-               Nagelkerke = NA)
+  #sumstat <- c(logLik = NA, deviance = NA, AIC = NA, BIC = NA, N = N, 
+  #             LR = NA, df = NA, p = NA, Aldrich.Nelson = NA, McFadden = NA, Cox.Snell = NA,
+  #             Nagelkerke = NA)
+  sumstat <- c(N = N)
   list(coef = coef, sumstat = sumstat, contrasts = obj$contrasts,
        xlevels = NULL, call = obj$call)
 }
