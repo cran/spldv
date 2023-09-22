@@ -1,13 +1,13 @@
-d93ff1f6201a8a1c141927ca9d50a1a3 *DESCRIPTION
+72f9fe032ca789b9d5e7247259028ad3 *DESCRIPTION
 9e43820a16dfb89ee3d93149294bb943 *NAMESPACE
 f7fb18ab557d0a35d5c45937856e1728 *R/HiddenForLater.R
 86061e1313a492022bd9804b4fbc01a1 *R/marginalEffects.R
-c9677551d4f47f3acc25ed83a17c272f *R/sbinaryGMM.R
+7def133a8a82babe2fcdfd2f1ddae0bd *R/sbinaryGMM.R
 7f3205a2d9f2affff15406db5d4d59ce *R/sbinaryLGMM.R
-cd11a8c14fe7e4bd132e6f98b9473a85 *inst/NEWS.Rd
+6a784c4f7b0e7b810f3ce76d8d7287d6 *inst/NEWS.Rd
 16438c7198a603ef13cf40163f63f97b *man/getSummary.bingmm.Rd
 eea43e3cc9b59dae177d0da390050a0a *man/getSummary.binlgmm.Rd
 e0486ee0ea40191b365324c29ceed24c *man/impacts.Rd
 01bd39cd3e04df8e74a07cca6e15fe4d *man/impacts.bingmm.Rd
-5c2bfac667bbc6097e15dfe3fa65413e *man/sbinaryGMM.Rd
+93f8858d2a3a5188719ad15bc2762992 *man/sbinaryGMM.Rd
 d563950c54803090fb8ede06bd50ab62 *man/sbinaryLGMM.Rd
